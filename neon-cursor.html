@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neon Cursor Trail</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #e8820c;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    cursor: none;
+    font-family: sans-serif;
+  }
+  canvas {
+    display: block;
+    position: fixed;
+    top: 0; left: 0;
+  }
+  #hint {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: rgba(0,0,0,0.22);
+    font-size: 15px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    pointer-events: none;
+    transition: opacity 0.8s ease;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hint">move your mouse</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+const hint   = document.getElementById('hint');
+
+let W = canvas.width  = window.innerWidth;
+let H = canvas.height = window.innerHeight;
+window.addEventListener('resize', () => {
+  W = canvas.width  = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+});
+
+// BG color as rgb for canvas fade
+const BG = [232, 130, 12];
+
+// Navy blue
+const BLUE_SHADES = [
+  [0,   0,   128],
+  [0,   0,   100],
+  [10,  10,  150],
+  [0,   0,   80],
+  [20,  20,  160],
+];
+
+// Smooth mouse with lerp so the trail never has sharp stutters
+let mouse  = { x: W / 2, y: H / 2 };
+let smooth = { x: W / 2, y: H / 2 };
+let moved  = false;
+
+document.addEventListener('mousemove', e => {
+  mouse.x = e.clientX;
+  mouse.y = e.clientY;
+  if (!moved) { moved = true; hint.style.opacity = '0'; }
+});
+
+// Trail stores smoothed positions
+const TRAIL_MAX = 18;
+const trail = [];
+
+// Pick a blue that shifts subtly over time
+let colorOffset = 0;
+
+function getBlue(t) {
+  // t = 0 (head) → 1 (tail)
+  const idx  = (colorOffset + Math.floor(t * 3)) % BLUE_SHADES.length;
+  const idx2 = (idx + 1) % BLUE_SHADES.length;
+  const f    = (t * 3) % 1;
+  const [r1,g1,b1] = BLUE_SHADES[idx];
+  const [r2,g2,b2] = BLUE_SHADES[idx2];
+  return [
+    Math.round(r1 + (r2-r1)*f),
+    Math.round(g1 + (g2-g1)*f),
+    Math.round(b1 + (b2-b1)*f),
+  ];
+}
+
+function drawSmoothTrail() {
+  if (trail.length < 3) return;
+
+  // Draw 3 passes: outer glow, mid glow, bright core
+  const passes = [
+    { widthMult: 14, alphaMult: 0.18 },
+    { widthMult: 5,  alphaMult: 0.55 },
+    { widthMult: 1.5, alphaMult: 0.95 },
+  ];
+
+  for (const pass of passes) {
+    // Draw the full smooth curve as one path per color segment
+    // We rebuild the path for every point so we can vary color
+    for (let i = 2; i < trail.length; i++) {
+      const t     = i / TRAIL_MAX;
+      const alpha = Math.pow(1 - t, 2.5);
+      const width = (0.8 + (1 - t) * 2.5) * pass.widthMult;
+      const [r,g,b] = getBlue(t);
+
+      // Use midpoints as control points for a quadratic bezier — silky smooth
+      const p0 = trail[i];
+      const p1 = trail[i - 1];
+      const p2 = trail[i - 2];
+
+      const mx1 = (p0.x + p1.x) / 2;
+      const my1 = (p0.y + p1.y) / 2;
+      const mx2 = (p1.x + p2.x) / 2;
+      const my2 = (p1.y + p2.y) / 2;
+
+      ctx.beginPath();
+      ctx.moveTo(mx1, my1);
+      ctx.quadraticCurveTo(p1.x, p1.y, mx2, my2);
+      ctx.strokeStyle = `rgba(${r},${g},${b},${alpha * pass.alphaMult})`;
+      ctx.lineWidth   = width;
+      ctx.lineCap     = 'round';
+      ctx.lineJoin    = 'round';
+      ctx.stroke();
+    }
+  }
+}
+
+function drawHead(x, y) {
+  const [r,g,b] = [0, 0, 128]; // navy blue head
+
+  // Outer halo
+  const halo = ctx.createRadialGradient(x, y, 0, x, y, 22);
+  halo.addColorStop(0,   `rgba(${r},${g},${b},0.25)`);
+  halo.addColorStop(1,   `rgba(${r},${g},${b},0)`);
+  ctx.beginPath();
+  ctx.arc(x, y, 22, 0, Math.PI * 2);
+  ctx.fillStyle = halo;
+  ctx.fill();
+
+  // Core ball
+  const core = ctx.createRadialGradient(x, y, 0, x, y, 5);
+  core.addColorStop(0,   `rgba(255,255,255,1)`);
+  core.addColorStop(0.4, `rgba(${r},${g},${b},1)`);
+  core.addColorStop(1,   `rgba(${r},${g},${b},0)`);
+  ctx.beginPath();
+  ctx.arc(x, y, 5, 0, Math.PI * 2);
+  ctx.fillStyle = core;
+  ctx.fill();
+}
+
+let frame = 0;
+function loop() {
+  requestAnimationFrame(loop);
+  frame++;
+
+  // Lerp smooth position toward real mouse — this is what kills jaggies
+  smooth.x += (mouse.x - smooth.x) * 0.35;
+  smooth.y += (mouse.y - smooth.y) * 0.35;
+
+  // Shift blue shade slowly over time
+  if (frame % 90 === 0) colorOffset = (colorOffset + 1) % BLUE_SHADES.length;
+
+  // Fade canvas back to BG color
+  ctx.fillStyle = `rgba(${BG[0]},${BG[1]},${BG[2]},0.5)`;
+  ctx.fillRect(0, 0, W, H);
+
+  // Store smoothed position
+  trail.unshift({ x: smooth.x, y: smooth.y });
+  if (trail.length > TRAIL_MAX) trail.length = TRAIL_MAX;
+
+  drawSmoothTrail();
+  drawHead(smooth.x, smooth.y);
+}
+
+loop();
+</script>
+</body>
+</html>
